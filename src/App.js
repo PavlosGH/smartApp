@@ -17,9 +17,12 @@ class App extends Component {
     message: '',
     currentAccount: '',
     votesRemaining: null,
+    votingOpen: true,
     notifications: [],
     voteCounts: [],
-    history: []
+    historyVisible: false,
+    history: [],
+    isDestroyed: false
   };
 
   // Η componentDidMount() καλείται ΜΟΝΟ την πρώτη φορά
@@ -29,6 +32,7 @@ class App extends Component {
       // Ορισμός των state μεταβλητών
       const projectManager = await lottery.methods.projectManager().call();
       const balance = await web3.eth.getBalance(lottery.options.address);
+      await this.updateHistory();
       this.setState({ message: '', projectManager, balance });
       try { // Επικοινωνία με το metamask
         const currentAccount = (await window.ethereum.request({ method: 'eth_requestAccounts' }))[0];
@@ -67,6 +71,12 @@ class App extends Component {
       this.addNotification(`New vote cast by ${voter} for candidate ${Number(proposalIndex)}`);
       this.updateBalanceAndVotes();
       this.updateVoteCounts();
+    });
+
+    lottery.events.winner({}).on('data', (event) => {
+      const { winnerName } = event.returnValues;
+
+      this.addNotification(`The voting progress ended and the winner is ${winnerName}`);
     });
   }
 
@@ -130,7 +140,7 @@ class App extends Component {
 
       // Μετά την επιτυχή ολοκλήρωση της συναλλαγής, ενημέρωση των ψήφων
       const updatedVotesRemaining = this.state.votesRemaining - 1;
-      this.setState({ message: 'Vote successful!', votesRemaining: updatedVotesRemaining });
+      this.setState({ message: 'Vote completed successfully!', votesRemaining: updatedVotesRemaining});
     } catch (error) {
       console.error('Error voting:', error);
       this.setState({ message: 'Error voting. See console for details.' });
@@ -154,16 +164,6 @@ class App extends Component {
     }));
   };
 
-  handleAction = async (action) => {
-    this.setState({ message: 'Waiting on transaction success...' });
-
-    await lottery.methods[action]().send({
-      from: this.state.currentAccount
-    });
-
-    this.setState({ message: `Action ${action} executed successfully!` });
-  };
-
   updateHistory = async () => {
     const history = [];
     const results = await lottery.methods.getRecentResults().call();
@@ -184,32 +184,103 @@ class App extends Component {
   };
 
   handleHistoryClick = async () => {
-    await this.updateHistory();
+    const historyVisible = !this.state.historyVisible;
+    this.setState({ historyVisible });
+    if (!this.state.isDestroyed){
+      await this.updateHistory();
+    }
   };
 
   declareWinner = async () => {
-    this.setState({ message: 'Waiting on transaction success...' });
+    try{
+      this.setState({ message: 'Waiting on transaction success...' });
 
-    await lottery.methods['declareWinner']().send({
-      from: this.state.currentAccount
-    });
+      await lottery.methods['declareWinner']().send({
+        from: this.state.currentAccount
+      });
 
-    await this.updateHistory();
+      await this.updateHistory();
 
-    console.log(this.state.history);
-    const winnerName = this.state.history[-1].winningProposalName;
+      const results = await lottery.methods.getRecentResults().call();
+      
+      const winningProposalNames = results[1];
 
-    this.setState({ message: `${winnerName} is the voting winner!` });
+      const votingOpen = false;
+
+      this.setState({ message: `${winningProposalNames[winningProposalNames.length - 1]} is the voting winner!` , votingOpen});
+    }catch (error) {
+      console.error('Error declaring winner:', error);
+      this.setState({ message: 'Error declaring winner. See console for details.' });
+    }
+    
   };
 
   resetVote = async () => {
-    this.setState({ message: 'Waiting on transaction success...' });
+    try{
+      this.setState({ message: 'Waiting on transaction success...' });
 
-    await lottery.methods['resetVote']().send({
-      from: this.state.currentAccount
-    });
+      await lottery.methods['resetVote']().send({
+        from: this.state.currentAccount
+      });
+
+      const voteCounts = [0, 0, 0]
+      const votingOpen = true;
+      const votesRemaining = 5;
+
+      this.setState({ message: 'Reset completed successfully.', voteCounts, votingOpen, votesRemaining });
+    }catch (error) {
+      console.error('Error voting reset:', error);
+      this.setState({ message: 'Error voting reset. See console for details.' });
+    }
   };
 
+  withdraw = async () => {
+    try{
+      await lottery.methods['withdraw']().send({
+        from: this.state.currentAccount
+      });
+
+      const balance = await web3.eth.getBalance(lottery.options.address);
+      this.setState({ message: 'Withdraw completed successfully.', balance });
+    }catch (error) {
+      console.error('Error withdraw:', error);
+      this.setState({ message: 'Error withdraw. See console for details.' });
+    }
+  };
+
+  handleNewOwnerChange = (event) => {
+    this.setState({ newOwner: event.target.value });
+  };
+
+  changeOwner = async () => {
+    try{
+      await lottery.methods.changeOwner(this.state.newOwner).send({
+        from: this.state.currentAccount
+      });
+
+      const projectManager = await lottery.methods.projectManager().call();
+      this.setState({ message: 'Change contract owner completed successfully.', projectManager });
+    }catch (error) {
+      console.error('Error changing owner:', error);
+      this.setState({ message: 'Error changing owner. See console for details.' });
+    }
+  };
+
+
+  destroyContract = async () => {
+    try{
+      await lottery.methods.destroyContract().send({
+        from: this.state.currentAccount
+      });
+      const balance = await web3.eth.getBalance(lottery.options.address);
+      const isDestroyed = true;
+
+      this.setState({ message:'Contract has been detroyed. ', isDestroyed, balance });
+    }catch (error) {
+      console.error('Error destroying contract:', error);
+      this.setState({ message: 'Error destroying contract. See console for details.' });
+    }
+  };
 
   // Κάθε φορά που η σελίδα γίνεται refresh
   render() {
@@ -230,11 +301,11 @@ class App extends Component {
         {/* Η σελίδα HLML λειτουργεί αυτόνομα, σαν να εκτελείται σε κάποιον server */}
         <div>
           <p>Elon - Votes: {this.state.voteCounts[0]}</p>  
-          <button onClick={() => this.vote(0)} disabled={this.state.votesRemaining <= 0 || this.state.currentAccount.toLowerCase() === this.state.projectManager.toLowerCase()}>Vote</button>
+          <button onClick={() => this.vote(0)} disabled={this.state.votesRemaining <= 0 || this.state.currentAccount.toLowerCase() === this.state.projectManager.toLowerCase() || !this.state.votingOpen}>Vote</button>
           <p>Mark - Votes: {this.state.voteCounts[1]} </p>
-          <button onClick={() => this.vote(1)} disabled={this.state.votesRemaining <= 0 || this.state.currentAccount.toLowerCase() === this.state.projectManager.toLowerCase()}>Vote</button>
+          <button onClick={() => this.vote(1)} disabled={this.state.votesRemaining <= 0 || this.state.currentAccount.toLowerCase() === this.state.projectManager.toLowerCase() || !this.state.votingOpen}>Vote</button>
           <p>Sam - Votes: {this.state.voteCounts[2]}</p>
-          <button onClick={() => this.vote(2)} disabled={this.state.votesRemaining <= 0 || this.state.currentAccount.toLowerCase() === this.state.projectManager.toLowerCase()}>Vote</button>
+          <button onClick={() => this.vote(2)} disabled={this.state.votesRemaining <= 0 || this.state.currentAccount.toLowerCase() === this.state.projectManager.toLowerCase() || !this.state.votingOpen}>Vote</button>
         </div>
 
         <hr /> {/*  -------------------- Οριζόντια γραμμή -------------------- */}
@@ -243,7 +314,7 @@ class App extends Component {
         <button onClick={this.handleHistoryClick} disabled={this.state.history.length === 0}>History</button>  
 
         <div>
-          {this.state.history.length > 0 ? (
+          {this.state.historyVisible ? (
             <ul>
               {this.state.history.map((item, index) => (
                 <li key={index}>
@@ -252,16 +323,26 @@ class App extends Component {
               ))}
             </ul>
           ) : (
-            <p>No voting history available</p>
+            this.state.history.length === 0 && <p>No voting history available</p>
           )}
         </div>
 
         <div>
           <button onClick={() => this.declareWinner()} disabled={this.state.currentAccount.toLowerCase() !== this.state.projectManager.toLowerCase()}>Declare Winner</button>
-          <button onClick={() => this.handleAction('withdraw')}>Withdraw</button>
-          <button onClick={() => this.resetVote()}>Reset</button>
-          <button onClick={() => this.handleAction('changeOwner')}>Change Owner</button>
-          <button onClick={() => this.handleAction('destroy')}>Destroy</button>
+          <button onClick={() => this.withdraw()} disabled={this.state.currentAccount.toLowerCase() !== this.state.projectManager.toLowerCase()}>Withdraw</button>
+          <button onClick={() => this.resetVote()} disabled={this.state.currentAccount.toLowerCase() !== this.state.projectManager.toLowerCase() || this.state.votingOpen}>Reset</button>
+          <div>
+            <button onClick={() => this.changeOwner()} disabled={this.state.currentAccount.toLowerCase() !== this.state.projectManager.toLowerCase() || this.state.votingOpen}>
+              Change Owner
+            </button>
+            <input
+              type="text"
+              placeholder="New Owner Address"
+              value={this.state.newOwner}
+              onChange={this.handleNewOwnerChange}
+            />
+          </div>
+          <button onClick={() => this.destroyContract()} disabled={this.state.currentAccount.toLowerCase() !== this.state.projectManager.toLowerCase()}>Destroy</button>
         </div>
 
         <hr />

@@ -7,6 +7,8 @@ contract Voting {
     uint constant MAX_VOTES = 5;
     bool public votingClosed;
     event VoteCast(address indexed voter, uint256 proposalIndex);
+    event winner(string winnerName);
+    bool public isDestroyed;
 
     struct Proposal {
         string name;
@@ -36,15 +38,21 @@ contract Voting {
         _;
     }
 
+    modifier notDestroyed() {
+        require(!isDestroyed, "Contract is destroyed");
+        _;
+    }
+
     constructor() {
         projectManager = msg.sender;
         proposals.push(Proposal("Elon", 0));
         proposals.push(Proposal("Mark", 0));
         proposals.push(Proposal("Sam", 0));
         votingClosed = false;
+        isDestroyed = false;
     }
 
-    function vote(uint proposalIndex) public payable validVote {
+    function vote(uint proposalIndex) public payable notDestroyed validVote {
         require(proposalIndex < proposals.length, "Invalid proposal index.");
         require(votesPerVoter[msg.sender] < MAX_VOTES, "Exceeds maximum votes per voter.");
 
@@ -55,11 +63,11 @@ contract Voting {
         emit VoteCast(msg.sender, proposalIndex);
     }
 
-    function getUserVotes(address user) public view returns (uint) {
+    function getUserVotes(address user) public view notDestroyed returns (uint) {
         return MAX_VOTES - votesPerVoter[user];
     }
 
-    function declareWinner() public onlyProjectManager returns (string memory winnerName) {
+    function declareWinner() public onlyProjectManager notDestroyed returns (string memory winnerName) {
         require(votingOpen(), "Voting is already closed.");
         uint winningVoteCount = 0;
         uint winningProposalIndex;
@@ -84,17 +92,19 @@ contract Voting {
         votingRounds.push(VotingRound(votingRounds.length + 1, winnerName, winningVoteCount));
 
         votingClosed = true;
+
+        emit winner(winnerName);
     }
 
-    function getVoteCount(uint proposalIndex) public view returns(uint){
+    function getVoteCount(uint proposalIndex) public view notDestroyed returns(uint){
         return proposals[proposalIndex].voteCount;
     }
 
-    function votingOpen() public view returns (bool) {
+    function votingOpen() public view notDestroyed returns (bool) {
         return !votingClosed;
     }
 
-    function drawTie() internal view returns (uint) {
+    function drawTie() internal view notDestroyed returns (uint) {
         uint[] memory tiedProposals = new uint[](proposals.length);
         uint count = 0;
         uint winningVoteCount = proposals[0].voteCount;
@@ -124,7 +134,7 @@ contract Voting {
         return (roundNumbers, winningProposalNames, winningVoteCounts);
     }
 
-    function resetVote() external {
+    function resetVote() external notDestroyed{
         require(msg.sender == projectManager, "Only the contract owner can reset the vote.");
         require(votingClosed, "Voting process is still open.");
 
@@ -137,5 +147,26 @@ contract Voting {
         }
 
         votingClosed = false;
+    }
+
+    function withdraw() public onlyProjectManager notDestroyed{
+        uint balance = address(this).balance;
+        require(balance > 0, "No funds to withdraw.");
+        payable(projectManager).transfer(balance);
+    }
+
+    function changeOwner(address newOwner) public onlyProjectManager notDestroyed{
+        require(newOwner != address(0), "New owner address cannot be zero");
+        projectManager = newOwner;
+    }
+
+    function destroyContract() public onlyProjectManager notDestroyed returns (bool){
+        uint balance = address(this).balance;
+        if (balance != 0){
+            withdraw();
+        }
+        selfdestruct(payable(projectManager));
+        isDestroyed = true;
+        return isDestroyed;
     }
 }
